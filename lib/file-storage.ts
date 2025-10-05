@@ -1,11 +1,12 @@
 import fs from 'fs';
 import path from 'path';
-import { Assistant, Document, Conversation } from './types';
+import { Assistant, Document, Conversation, TestResult } from './types';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const ASSISTANTS_FILE = path.join(DATA_DIR, 'assistants.json');
 const CONVERSATIONS_FILE = path.join(DATA_DIR, 'conversations.json');
 const DOCUMENTS_FILE = path.join(DATA_DIR, 'documents.json');
+const TEST_RESULTS_FILE = path.join(DATA_DIR, 'test-results.json');
 
 // Ensure data directory exists
 function ensureDataDir() {
@@ -230,5 +231,28 @@ export class FileStorage {
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
       .map(item => item.document);
+  }
+
+  // Test Results
+  static getAllTestResults(): TestResult[] {
+    return readJsonFile<TestResult>(TEST_RESULTS_FILE, []);
+  }
+
+  static getTestResultsByAssistant(assistantId: string): TestResult[] {
+    const testResults = this.getAllTestResults();
+    return testResults.filter(tr => tr.assistantId === assistantId);
+  }
+
+  static createTestResult(testResultData: TestResult): TestResult {
+    const testResults = this.getAllTestResults();
+    testResults.push(testResultData);
+    writeJsonFile(TEST_RESULTS_FILE, testResults);
+    return testResultData;
+  }
+
+  static deleteTestResultsByAssistant(assistantId: string): void {
+    const testResults = this.getAllTestResults();
+    const filteredResults = testResults.filter(tr => tr.assistantId !== assistantId);
+    writeJsonFile(TEST_RESULTS_FILE, filteredResults);
   }
 }

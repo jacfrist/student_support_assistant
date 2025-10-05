@@ -95,8 +95,8 @@ export async function POST(request: NextRequest) {
     
     try {
       if (documentsFolder && documentsFolder.trim()) {
-        processedCount = (await safeSyncFolder(assistantId, documentsFolder)) || 0;
-        await safeStartMonitoring(assistantId, documentsFolder);
+        processedCount = (await safeSyncFolder(assistantId!, documentsFolder)) || 0;
+        await safeStartMonitoring(assistantId!, documentsFolder);
         
         console.log(`Processed ${processedCount} initial documents for assistant ${assistantId}`);
         initialDocumentsProcessed = processedCount > 0;

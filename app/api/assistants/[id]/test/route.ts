@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import clientPromise from '@/lib/mongodb';
-import { ObjectId } from 'mongodb';
+import { FileStorage } from '@/lib/file-storage';
 import { AIService } from '@/lib/ai-service';
 import { TestQuestion, TestResult } from '@/lib/types';
 
@@ -13,16 +12,10 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       return NextResponse.json({ error: 'Questions array is required' }, { status: 400 });
     }
     
-    const client = await clientPromise;
-    const db = client.db('student-support-assistant');
-    
     // Verify assistant exists
-    const assistant = await db.collection('assistants').findOne({ 
-      _id: new ObjectId(params.id),
-      isActive: true 
-    });
+    const assistant = FileStorage.getAssistantById(params.id);
     
-    if (!assistant) {
+    if (!assistant || !assistant.isActive) {
       return NextResponse.json({ error: 'Assistant not found or inactive' }, { status: 404 });
     }
     
@@ -35,9 +28,10 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
         const result = await AIService.generateTestResponse(params.id, question.question);
         const endTime = Date.now();
         
-        const testResult: Omit<TestResult, '_id'> = {
+        const testResult: TestResult = {
+          _id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
           assistantId: params.id,
-          testQuestionId: question._id || new ObjectId().toString(),
+          testQuestionId: question._id || Date.now().toString() + Math.random().toString(36).substr(2, 9),
           question: question.question,
           answer: result.answer,
           responseTime: endTime - startTime,
@@ -47,11 +41,8 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
           testedBy: 'system' // In real app, get from auth
         };
         
-        const insertResult = await db.collection('testResults').insertOne(testResult);
-        testResults.push({
-          ...testResult,
-          _id: insertResult.insertedId.toString()
-        });
+        FileStorage.createTestResult(testResult);
+        testResults.push(testResult);
         
       } catch (error) {
         console.error(`Error testing question "${question.question}":`, error);
@@ -84,32 +75,29 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
     const { searchParams } = new URL(request.url);
     const limit = parseInt(searchParams.get('limit') || '10');
     
-    const client = await clientPromise;
-    const db = client.db('student-support-assistant');
-    
     // Get recent test results
-    const testResults = await db.collection('testResults')
-      .find({ assistantId: params.id })
-      .sort({ testedAt: -1 })
-      .limit(limit)
-      .toArray();
+    const allTestResults = FileStorage.getTestResultsByAssistant(params.id);
+    const testResults = allTestResults
+      .sort((a, b) => new Date(b.testedAt).getTime() - new Date(a.testedAt).getTime())
+      .slice(0, limit);
     
     // Get summary statistics
-    const totalTests = await db.collection('testResults').countDocuments({ assistantId: params.id });
+    const totalTests = allTestResults.length;
     
-    const avgRatingPipeline = [
-      { $match: { assistantId: params.id } },
-      { $group: { _id: null, avgRating: { $avg: '$rating' }, avgResponseTime: { $avg: '$responseTime' } } }
-    ];
+    const averageRating = totalTests > 0 
+      ? allTestResults.reduce((sum, r) => sum + r.rating, 0) / totalTests 
+      : 0;
     
-    const avgStats = await db.collection('testResults').aggregate(avgRatingPipeline).toArray();
+    const averageResponseTime = totalTests > 0
+      ? allTestResults.reduce((sum, r) => sum + r.responseTime, 0) / totalTests
+      : 0;
     
     return NextResponse.json({
       testResults,
       summary: {
         totalTests,
-        averageRating: avgStats[0]?.avgRating || 0,
-        averageResponseTime: avgStats[0]?.avgResponseTime || 0
+        averageRating,
+        averageResponseTime
       }
     });
     

@@ -13,16 +13,10 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
       return NextResponse.json({ error: 'Message is required' }, { status: 400 });
     }
     
-    const client = await clientPromise;
-    const db = client.db('student-support-assistant');
-    
     // Verify assistant exists and is active
-    const assistant = await db.collection('assistants').findOne({ 
-      _id: new ObjectId(params.id),
-      isActive: true 
-    });
+    const assistant = FileStorage.getAssistantById(params.id);
     
-    if (!assistant) {
+    if (!assistant || !assistant.isActive) {
       return NextResponse.json({ error: 'Assistant not found or inactive' }, { status: 404 });
     }
     
@@ -31,38 +25,36 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     const currentSessionId = sessionId || uuidv4();
     
     if (conversationId) {
-      const existingConversation = await db.collection('conversations').findOne({
-        _id: new ObjectId(conversationId),
-        assistantId: params.id
-      });
+      const existingConversation = FileStorage.getConversationById(conversationId);
       
-      if (existingConversation) {
-        conversation = existingConversation as any as Conversation;
+      if (existingConversation && existingConversation.assistantId === params.id) {
+        conversation = existingConversation;
       } else {
         // Create new conversation if not found
-        conversation = {
+        conversation = FileStorage.createConversation({
           assistantId: params.id,
           sessionId: currentSessionId,
           messages: [],
           startedAt: new Date(),
           lastMessageAt: new Date()
-        };
-        
-        const result = await db.collection('conversations').insertOne(conversation as any);
-        conversation._id = result.insertedId.toString();
+        });
       }
     } else {
-      // Create new conversation
-      conversation = {
-        assistantId: params.id,
-        sessionId: currentSessionId,
-        messages: [],
-        startedAt: new Date(),
-        lastMessageAt: new Date()
-      };
+      // Try to find existing conversation by sessionId, or create new one
+      const existingConversation = FileStorage.getConversationBySession(params.id, currentSessionId);
       
-      const result = await db.collection('conversations').insertOne(conversation as any);
-      conversation._id = result.insertedId.toString();
+      if (existingConversation) {
+        conversation = existingConversation;
+      } else {
+        // Create new conversation
+        conversation = FileStorage.createConversation({
+          assistantId: params.id,
+          sessionId: currentSessionId,
+          messages: [],
+          startedAt: new Date(),
+          lastMessageAt: new Date()
+        });
+      }
     }
     
     // Add user message to conversation
@@ -97,16 +89,11 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     conversation.messages.push(assistantMessage);
     conversation.lastMessageAt = new Date();
     
-    // Update conversation in database
-    await db.collection('conversations').updateOne(
-      { _id: new ObjectId(conversation._id!) },
-      { 
-        $set: { 
-          messages: conversation.messages,
-          lastMessageAt: conversation.lastMessageAt 
-        } 
-      }
-    );
+    // Update conversation in file storage
+    FileStorage.updateConversation(conversation._id!, {
+      messages: conversation.messages,
+      lastMessageAt: conversation.lastMessageAt
+    });
     
     return NextResponse.json({
       conversationId: conversation._id,
@@ -130,20 +117,18 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
     const conversationId = searchParams.get('conversationId');
     const sessionId = searchParams.get('sessionId');
     
-    const client = await clientPromise;
-    const db = client.db('student-support-assistant');
-    
-    let query: any = { assistantId: params.id };
+    let conversation: Conversation | null = null;
     
     if (conversationId) {
-      query._id = new ObjectId(conversationId);
+      conversation = FileStorage.getConversationById(conversationId);
+      if (conversation && conversation.assistantId !== params.id) {
+        conversation = null; // Ensure conversation belongs to this assistant
+      }
     } else if (sessionId) {
-      query.sessionId = sessionId;
+      conversation = FileStorage.getConversationBySession(params.id, sessionId);
     } else {
       return NextResponse.json({ error: 'conversationId or sessionId required' }, { status: 400 });
     }
-    
-    const conversation = await db.collection('conversations').findOne(query);
     
     if (!conversation) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
