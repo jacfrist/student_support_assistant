@@ -207,7 +207,7 @@ export default function ChatPage() {
                     
                     {/* Timestamp */}
                     <p className="text-xs mt-2 opacity-70">
-                      {message.timestamp.toLocaleTimeString()}
+                      {new Date(message.timestamp).toLocaleTimeString()}
                     </p>
                   </div>
                 </div>
