@@ -1,25 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
-import clientPromise from '@/lib/mongodb';
-import { ObjectId } from 'mongodb';
+import { FileStorage } from '@/lib/file-storage';
 
 export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
   try {
-    const client = await clientPromise;
-    const db = client.db('student-support-assistant');
-    
     // Verify assistant exists
-    const assistant = await db.collection('assistants').findOne({ _id: new ObjectId(params.id) });
+    const assistant = FileStorage.getAssistantById(params.id);
     if (!assistant) {
       return NextResponse.json({ error: 'Assistant not found' }, { status: 404 });
     }
     
     // Get documents for this assistant
-    const documents = await db.collection('documents')
-      .find({ assistantId: params.id })
-      .sort({ lastModified: -1 })
-      .toArray();
+    const documents = FileStorage.getDocumentsByAssistant(params.id);
     
-    return NextResponse.json(documents);
+    // Sort by lastModified date (newest first)
+    const sortedDocuments = documents.sort((a, b) => {
+      const dateA = new Date(a.lastModified || 0).getTime();
+      const dateB = new Date(b.lastModified || 0).getTime();
+      return dateB - dateA;
+    });
+    
+    return NextResponse.json(sortedDocuments);
     
   } catch (error) {
     console.error('Error fetching documents:', error);
