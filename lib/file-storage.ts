@@ -206,28 +206,61 @@ export class FileStorage {
   // Search documents by content
   static searchDocuments(assistantId: string, query: string, limit: number = 5): Document[] {
     const documents = this.getDocumentsByAssistant(assistantId);
-    const searchTerms = query.toLowerCase().split(' ').filter(term => term.length > 2);
     
-    if (searchTerms.length === 0) return documents.slice(0, limit);
+    // Improved search term processing
+    const searchTerms = query.toLowerCase()
+      .split(/[\s,.-]+/)
+      .filter(term => term.length > 1) // Allow 2+ character terms
+      .map(term => term.trim());
+    
+    // Also look for phrase matches
+    const originalQuery = query.toLowerCase().trim();
+    
+    if (searchTerms.length === 0 && !originalQuery) return documents.slice(0, limit);
     
     const scoredDocuments = documents.map(doc => {
       let score = 0;
       const content = doc.content?.toLowerCase() || '';
       const title = doc.metadata?.title?.toLowerCase() || '';
+      const filename = doc.filename?.toLowerCase() || '';
       
+      // Exact phrase matching (highest priority)
+      if (originalQuery.length > 3) {
+        if (content.includes(originalQuery)) score += 50;
+        if (title.includes(originalQuery)) score += 100;
+        if (filename.includes(originalQuery)) score += 75;
+      }
+      
+      // Individual term matching
       searchTerms.forEach(term => {
+        if (term.length <= 1) return;
+        
         // Title matches are worth more
-        if (title.includes(term)) score += 3;
-        // Content matches
-        const contentMatches = (content.match(new RegExp(term, 'g')) || []).length;
-        score += contentMatches;
+        if (title.includes(term)) score += 10;
+        if (filename.includes(term)) score += 8;
+        
+        // Content matches with frequency consideration
+        const contentMatches = (content.match(new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
+        score += contentMatches * 2;
+        
+        // Boost for common financial aid terms
+        if (['financial', 'aid', 'tuition', 'refund', 'ship', 'insurance', 'scholarship', 'grant'].includes(term)) {
+          score += contentMatches * 3;
+        }
       });
       
       return { document: doc, score };
     });
     
-    return scoredDocuments
-      .filter(item => item.score > 0)
+    // Return documents with any score > 0, or all documents if no matches
+    const filteredResults = scoredDocuments.filter(item => item.score > 0);
+    
+    if (filteredResults.length === 0) {
+      // If no scored results, return all documents (fallback)
+      return documents.slice(0, limit);
+    }
+    
+    return filteredResults
       .sort((a, b) => b.score - a.score)
       .slice(0, limit)
       .map(item => item.document);

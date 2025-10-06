@@ -94,7 +94,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
             title: pdfFile.replace('.pdf', '').replace(/[-_]/g, ' '),
             author: pdfData.info?.Author || 'Unknown',
             subject: pdfData.info?.Subject || '',
-            keywords: pdfData.info?.Keywords ? pdfData.info.Keywords.split(',').map(k => k.trim()) : []
+            keywords: pdfData.info?.Keywords ? pdfData.info.Keywords.split(',').map((k: string) => k.trim()) : []
           },
           processed: true,
           processedAt: new Date(),
