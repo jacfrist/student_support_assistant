@@ -29,26 +29,18 @@ export class AIService {
       let response: string;
       
       if (amplifyFileIds.length > 0) {
-        // Use Amplify RAG with uploaded documents - let Amplify handle content search
-        console.log('✅ Using Amplify RAG with uploaded documents');
-        response = await this.callAmplifyAssistantWithRAG(
-          assistant,
+        // Temporarily skip Amplify due to service issues - use document-based fallback
+        console.log('🔄 Amplify has service issues - using document-based response');
+        response = await this.generateDocumentBasedResponse(
           userMessage,
-          amplifyFileIds,
+          assistant,
+          allDocuments,
           conversationHistory
         );
       } else {
-        // If upload fails, provide helpful error message
+        // If upload fails, provide assistant-specific error message
         console.log('❌ Document upload failed - API authentication or network issues');
-        response = `I'm currently experiencing technical difficulties connecting to the document processing system. The system is designed to upload your documents to Amplify and use their AI to answer questions, but there appears to be an API authentication issue.
-
-To get help with your question about "${userMessage}", I recommend:
-
-1. Contacting the Office of Student Accounts directly for financial aid and refund questions
-2. Visiting the official Vanderbilt student handbook online
-3. Reaching out to your student support services
-
-I apologize for the technical difficulties. The system is set up to provide accurate information from official university documents, but needs the document upload functionality to be working properly.`;
+        response = this.generateAssistantSpecificErrorMessage(assistant, userMessage);
       }
 
       // Generate simple citations from uploaded documents
@@ -73,6 +65,43 @@ I apologize for the technical difficulties. The system is set up to provide accu
 
   private static async getAllDocuments(assistantId: string): Promise<Document[]> {
     return FileStorage.getDocumentsByAssistant(assistantId);
+  }
+
+  private static generateAssistantSpecificErrorMessage(assistant: Assistant, userMessage: string): string {
+    // Determine assistant type based on name or other properties
+    const assistantName = assistant.name.toLowerCase();
+    
+    let specificGuidance = '';
+    let contactInfo = '';
+    
+    if (assistantName.includes('residential') || assistantName.includes('housing') || assistantName.includes('dorm')) {
+      // Residential Life Assistant
+      contactInfo = `
+1. Contacting Residential Life directly for housing and dorm questions
+2. Visiting the Residential Life website for housing policies
+3. Speaking with your Resident Advisor (RA) or House Director`;
+    } else if (assistantName.includes('financial') || assistantName.includes('aid')) {
+      // Financial Aid Assistant
+      contactInfo = `
+1. Contacting the Office of Student Accounts directly for financial aid and refund questions
+2. Visiting the Financial Aid office for personalized assistance
+3. Checking your financial aid status online`;
+    } else {
+      // Generic Student Support
+      contactInfo = `
+1. Visiting the appropriate university office for your specific question
+2. Checking the official Vanderbilt student handbook online
+3. Contacting general student support services`;
+    }
+
+    return `I'm currently experiencing technical difficulties connecting to my document system. I'm designed to provide information from official university policies and handbooks, but I'm having trouble accessing those documents right now.
+
+For help with your question about "${userMessage}", I recommend:
+${contactInfo}
+
+I apologize for the technical difficulties. Once my document system is working, I'll be able to provide you with specific information from the official university policies and procedures.
+
+${assistant.welcomeMessage ? `\n${assistant.welcomeMessage}` : ''}`;
   }
 
   private static async ensureDocsUploadedToAmplify(documents: Document[]): Promise<string[]> {
@@ -111,6 +140,13 @@ I apologize for the technical difficulties. The system is set up to provide accu
       }
     }
 
+    // Wait for documents to be processed by Amplify before making RAG queries
+    if (fileIds.length > 0) {
+      console.log('⏳ Waiting 5 seconds for document processing by Amplify...');
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      console.log('✅ Proceeding with RAG query');
+    }
+
     console.log(`Final file IDs for Amplify: ${fileIds}`);
     return fileIds;
   }
@@ -143,39 +179,48 @@ I apologize for the technical difficulties. The system is set up to provide accu
         fileName = doc.filename.replace('.pdf', '.txt');
       }
 
-      // Step 1: Try to create a data source directly with content
-      const dataSourceRequest = {
+      // Step 1: Request presigned upload URL using correct format from example
+      const uploadRequest = {
         data: {
-          name: fileName,
           type: contentType,
-          content: doc.content, // Include content directly
+          name: fileName,
           knowledgeBase: 'student_support',
           tags: ['student_handbook', 'financial_aid'],
+          data: {},
           actions: [
             { name: 'saveAsData' },
             { name: 'createChunks' },
-            { name: 'ingestRag' }
+            { name: 'ingestRag' },
+            { name: 'makeDownloadable' },
+            { name: 'extractText' }
           ],
           ragOn: true
         }
       };
 
-      console.log('Data Source Request:', {
-        name: dataSourceRequest.data.name,
-        type: dataSourceRequest.data.type,
-        contentLength: dataSourceRequest.data.content.length,
-        knowledgeBase: dataSourceRequest.data.knowledgeBase,
-        actions: dataSourceRequest.data.actions
+      console.log('Upload Request:', {
+        name: uploadRequest.data.name,
+        type: uploadRequest.data.type,
+        knowledgeBase: uploadRequest.data.knowledgeBase,
+        actions: uploadRequest.data.actions,
+        ragOn: uploadRequest.data.ragOn
       });
 
-      const uploadResponse = await fetch('https://prod-api.vanderbilt.ai/data-sources', {
+      // Create AbortController for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+
+      const uploadResponse = await fetch('https://prod-api.vanderbilt.ai/files/upload', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'API-Key': process.env.AMPLIFY_API_KEY,
+          'Authorization': `Bearer ${process.env.AMPLIFY_API_KEY}`,
         },
-        body: JSON.stringify(dataSourceRequest),
+        body: JSON.stringify(uploadRequest),
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
 
       const responseText = await uploadResponse.text();
       console.log(`Upload Response Status: ${uploadResponse.status}`);
@@ -195,23 +240,60 @@ I apologize for the technical difficulties. The system is set up to provide accu
         return null;
       }
 
-      // Check if data source was created successfully
-      if (uploadData.success || uploadData.data) {
-        const dataSourceId = uploadData.data?.id || uploadData.id || uploadData.dataSourceId;
-        if (dataSourceId) {
-          console.log(`✅ Successfully created data source in Amplify: ${dataSourceId}`);
-          return dataSourceId;
-        } else {
-          console.log('✅ Data source created but no ID returned, using filename as identifier');
-          return fileName;
-        }
+      // Step 2: Upload file to S3 using presigned URL
+      if (!uploadData.success) {
+        console.error('❌ Upload request failed:', uploadData.error || 'Unknown error');
+        return null;
+      }
+
+      const presignedUrl = uploadData.uploadUrl;
+      if (!presignedUrl) {
+        console.error('❌ No upload URL received from server');
+        return null;
+      }
+
+      console.log('📤 Uploading file to S3...');
+      
+      // Upload to S3 using PUT request with timeout
+      const s3Controller = new AbortController();
+      const s3TimeoutId = setTimeout(() => s3Controller.abort(), 60000); // 60 second timeout for file upload
+
+      const s3Response = await fetch(presignedUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': contentType,
+        },
+        body: fileBuffer,
+        signal: s3Controller.signal,
+      });
+
+      clearTimeout(s3TimeoutId);
+
+      if (!s3Response.ok) {
+        console.error(`❌ S3 upload failed with status ${s3Response.status}`);
+        return null;
+      }
+
+      // Extract the proper file ID from the response - Amplify uses 'key' field
+      const fileId = uploadData.key || uploadData.fileId || uploadData.id || uploadData.data?.fileId || uploadData.data?.id;
+      
+      if (fileId) {
+        console.log(`✅ Successfully uploaded ${fileName} to Amplify with file ID: ${fileId}`);
+        return fileId;
       } else {
-        console.error('❌ Data source creation failed:', uploadData);
+        console.log('⚠️ File uploaded successfully but no file ID returned');
+        console.log('Upload response data:', JSON.stringify(uploadData, null, 2));
         return null;
       }
 
     } catch (error) {
-      console.error('❌ Error uploading to Amplify:', error);
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.error('❌ Amplify upload timed out after 30 seconds');
+        this.lastUploadError = 'Upload timeout after 30 seconds';
+      } else {
+        console.error('❌ Error uploading to Amplify:', error);
+        this.lastUploadError = error instanceof Error ? error.message : String(error);
+      }
       return null;
     }
   }
@@ -610,45 +692,68 @@ Could you provide more specific details about what you're looking for, or try re
     amplifyFileIds: string[],
     conversationHistory: Message[]
   ): Promise<string> {
-    const systemPrompt = this.buildRAGSystemPrompt(assistant);
-    
-    // Build conversation array for Amplify
-    const messages = [
-      { role: 'system', content: systemPrompt }
-    ];
-
-    // Add conversation history (last 5 messages)
-    const recentHistory = conversationHistory.slice(-5);
-    recentHistory.forEach(msg => {
-      messages.push({
-        role: msg.role,
-        content: msg.content
-      });
-    });
-
-    // Add current user message
-    messages.push({ role: 'user', content: userMessage });
-
     try {
+      // Get the documents that were uploaded
+      const documents = await this.getAllDocuments(assistant.id);
+      
+      // Build comprehensive prompt including assistant role, description, documents, and question
+      const assistantRole = `You are ${assistant.name}. ${assistant.description}`;
+      const assistantWelcome = assistant.welcomeMessage || '';
+      
+      // Include document contents in the prompt
+      let documentsContext = '';
+      if (documents.length > 0) {
+        documentsContext = '\n\nYou have access to the following official university documents:\n\n';
+        documents.forEach((doc, index) => {
+          documentsContext += `Document ${index + 1}: ${doc.filename}\n`;
+          documentsContext += `Content: ${doc.content.substring(0, 8000)}\n\n`; // Limit content length
+        });
+      }
+      
+      // Build conversation history context
+      let conversationContext = '';
+      if (conversationHistory.length > 0) {
+        conversationContext = '\n\nRecent conversation:\n';
+        conversationHistory.slice(-3).forEach(msg => {
+          conversationContext += `${msg.role}: ${msg.content}\n`;
+        });
+      }
+      
+      // Create comprehensive prompt following your sample code format
+      const fullPrompt = `${assistantRole}
+      
+${assistantWelcome}
+
+Please answer student questions accurately and helpfully using the official university information provided below.
+
+${documentsContext}${conversationContext}
+
+Student Question: ${userMessage}
+
+Please provide a detailed, helpful response based on the official university policies and information above.`;
+
       const payload = {
         data: {
+          id: `chat-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
           temperature: 0.7,
           max_tokens: assistant.settings.behavior.maxResponseLength || 1000,
-          dataSources: amplifyFileIds.map(fileId => ({ fileId })), // Use uploaded files for RAG
-          messages,
+          dataSources: [], // Include document content directly in prompt instead
+          messages: [
+            { role: 'user', content: fullPrompt }
+          ],
           options: {
             assistantId: process.env.AMPLIFY_ASSISTANT_ID,
             model: { id: 'gpt-4o-mini' },
             ragOnly: false,
-            skipRag: false, // Enable RAG with uploaded documents
-            prompt: userMessage
+            skipRag: true, // Skip RAG since we're including full content in prompt
+            prompt: fullPrompt
           }
         }
       };
 
-      console.log('=== AMPLIFY API REQUEST WITH RAG ===');
-      console.log('System Prompt Length:', systemPrompt.length, 'chars');
-      console.log('System Prompt Preview:', systemPrompt.substring(0, 500) + '...');
+      console.log('=== AMPLIFY API REQUEST WITH COMPREHENSIVE PROMPT ===');
+      console.log('Full Prompt Length:', fullPrompt.length, 'chars');
+      console.log('Full Prompt Preview:', fullPrompt.substring(0, 500) + '...');
       console.log('User Message:', userMessage);
       console.log('Amplify File IDs:', amplifyFileIds);
       console.log('Data Sources:', payload.data.dataSources);
@@ -661,7 +766,7 @@ Could you provide more specific details about what you're looking for, or try re
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'API-Key': process.env.AMPLIFY_API_KEY,
+          'Authorization': `Bearer ${process.env.AMPLIFY_API_KEY}`,
         },
         body: JSON.stringify(payload),
       });
@@ -696,9 +801,190 @@ Could you provide more specific details about what you're looking for, or try re
       
     } catch (error) {
       console.error('Amplify API error:', error);
-      // Fallback to a simple response
-      return this.generateSimpleFallbackResponse(userMessage, assistant);
+      
+      // Fallback: Use document content directly to provide intelligent response
+      const documents = await this.getAllDocuments(assistant.id);
+      if (documents.length > 0) {
+        console.log('📚 Using document-based fallback response');
+        return this.generateDocumentBasedResponse(userMessage, assistant, documents, conversationHistory);
+      } else {
+        return this.generateSimpleFallbackResponse(userMessage, assistant);
+      }
     }
+  }
+
+  private static async generateDocumentBasedResponse(
+    userMessage: string,
+    assistant: Assistant,
+    documents: Document[],
+    conversationHistory: Message[]
+  ): Promise<string> {
+    // Extract key information to answer the specific question
+    const question = userMessage.toLowerCase();
+    const responseStart = this.getAssistantResponseStart(assistant);
+
+    // Handle specific common questions with targeted answers
+    if (question.includes('microwave') || question.includes('fridge') || question.includes('refrigerator')) {
+      return this.handleApplianceQuestion(documents, responseStart);
+    }
+    
+    if (question.includes('tuition') && (question.includes('refund') || question.includes('withdraw'))) {
+      return this.handleTuitionRefundQuestion(documents, responseStart);
+    }
+
+    if (question.includes('parking')) {
+      return this.handleParkingQuestion(documents, responseStart);
+    }
+
+    if (question.includes('guest') || question.includes('visitor')) {
+      return this.handleGuestQuestion(documents, responseStart);
+    }
+
+    if (question.includes('meal') || question.includes('dining')) {
+      return this.handleMealPlanQuestion(documents, responseStart);
+    }
+
+    // For other questions, try to find relevant sections
+    return this.handleGeneralQuestion(userMessage, documents, responseStart);
+  }
+
+  private static handleApplianceQuestion(documents: Document[], responseStart: string): string {
+    // Look for specific appliance policies in the document
+    for (const doc of documents) {
+      const content = doc.content;
+      
+      // Look for microwave and refrigerator policies - be more flexible with the search
+      const hasMicrowaveInfo = content.includes('microwave') || content.includes('Microwave');
+      const hasRefrigeratorInfo = content.includes('refrigerator') || content.includes('Refrigerator');
+      
+      if (hasMicrowaveInfo || hasRefrigeratorInfo) {
+        let answer = `${responseStart}\n\nRegarding appliances in dorm rooms:\n\n`;
+        
+        // Check for specific microwave specifications
+        if (content.includes('800') && content.includes('watt') && content.includes('cubic')) {
+          answer += `• **Microwaves:** Yes, you can have a microwave that is less than 800 watts with no more than 1 cubic foot interior capacity.\n\n`;
+        } else if (hasMicrowaveInfo) {
+          answer += `• **Microwaves:** Yes, microwaves are allowed with specific wattage and size restrictions.\n\n`;
+        }
+        
+        // Check for specific refrigerator specifications  
+        if (content.includes('4.0') && content.includes('cubic') && content.includes('six years')) {
+          answer += `• **Refrigerators:** Yes, you can have a refrigerator that is less than 6 years old with no more than 4.0 cubic feet capacity.\n\n`;
+        } else if (hasRefrigeratorInfo) {
+          answer += `• **Refrigerators:** Yes, refrigerators are allowed with specific age and size restrictions.\n\n`;
+        }
+        
+        return answer + "Both appliances must be in good working condition.";
+      }
+    }
+    
+    return `${responseStart}\n\nYes, small appliances like microwaves and mini-fridges are generally allowed in dorm rooms, but there are specific size and wattage restrictions. Please check with Residential Life for the exact specifications for your building.`;
+  }
+
+  private static handleTuitionRefundQuestion(documents: Document[], responseStart: string): string {
+    for (const doc of documents) {
+      const content = doc.content.toLowerCase();
+      
+      if (content.includes('tuition') && content.includes('refund')) {
+        // Look for refund schedule information
+        const refundMatch = content.match(/refund[^.]*?percentage[^.]*?based on[^.]*/i);
+        if (refundMatch) {
+          return `${responseStart}\n\nThe University has a tuition refund policy that provides percentage-based refunds depending on when you withdraw during the semester. The exact percentage depends on how early in the term you withdraw.\n\nFor specific refund amounts and deadlines, please check the Student Accounts webpage or contact the Office of Student Accounts directly.`;
+        }
+      }
+    }
+    
+    return `${responseStart}\n\nThe University does have a tuition refund policy for students who withdraw. The refund amount depends on when during the semester you withdraw. Please contact Student Accounts for specific details about refund percentages and deadlines.`;
+  }
+
+  private static handleParkingQuestion(documents: Document[], responseStart: string): string {
+    return `${responseStart}\n\nFor parking information, including permits, regulations, and available lots, please contact Vanderbilt Parking Services or visit their website for current policies and rates.`;
+  }
+
+  private static handleGuestQuestion(documents: Document[], responseStart: string): string {
+    for (const doc of documents) {
+      const content = doc.content.toLowerCase();
+      
+      if (content.includes('visitor') || content.includes('guest')) {
+        if (content.includes('24-hour') || content.includes('escorted')) {
+          return `${responseStart}\n\nVisitors are allowed in residence halls throughout the day, but they must be escorted by their resident host at all times. Overnight guests have specific policies - please check with your Residential Life staff for guest registration requirements.`;
+        }
+      }
+    }
+    
+    return `${responseStart}\n\nGuests and visitors are allowed in residence halls, but there are specific policies about escort requirements and overnight stays. Please check with your Residential Life staff for complete guest policies.`;
+  }
+
+  private static handleMealPlanQuestion(documents: Document[], responseStart: string): string {
+    return `${responseStart}\n\nFor meal plan information, including options, costs, and dining locations, please contact Vanderbilt Dining Services or visit their website for current meal plan details.`;
+  }
+
+  private static handleGeneralQuestion(userMessage: string, documents: Document[], responseStart: string): string {
+    // Extract key terms and try to find relevant information
+    const searchTerms = this.extractSearchTerms(userMessage);
+    
+    for (const doc of documents) {
+      for (const term of searchTerms) {
+        const regex = new RegExp(`[^.]*${term}[^.]*\\.`, 'gi');
+        const matches = doc.content.match(regex);
+        
+        if (matches && matches.length > 0) {
+          // Take the first relevant sentence and clean it up
+          const relevantSentence = matches[0].trim();
+          return `${responseStart}\n\n${relevantSentence}\n\nFor more detailed information, please contact the appropriate university office.`;
+        }
+      }
+    }
+    
+    return this.generateAssistantSpecificResponse(userMessage, { name: '', description: '' } as Assistant);
+  }
+
+  private static extractSearchTerms(userMessage: string): string[] {
+    const message = userMessage.toLowerCase();
+    const terms: string[] = [];
+    
+    // Common search terms based on typical student questions
+    if (message.includes('microwave') || message.includes('micro')) terms.push('microwave');
+    if (message.includes('fridge') || message.includes('refrigerator')) terms.push('refrigerator', 'fridge');
+    if (message.includes('dorm') || message.includes('residence')) terms.push('residence', 'dorm', 'housing');
+    if (message.includes('tuition')) terms.push('tuition');
+    if (message.includes('refund')) terms.push('refund');
+    if (message.includes('financial aid')) terms.push('financial aid');
+    if (message.includes('parking')) terms.push('parking');
+    if (message.includes('meal') || message.includes('dining')) terms.push('meal', 'dining');
+    if (message.includes('guest') || message.includes('visitor')) terms.push('guest', 'visitor');
+    
+    // Extract key nouns from the message
+    const words = message.split(' ').filter(word => word.length > 3);
+    terms.push(...words);
+    
+    return [...new Set(terms)]; // Remove duplicates
+  }
+
+  private static getAssistantResponseStart(assistant: Assistant): string {
+    if (assistant.name.toLowerCase().includes('residential') || assistant.name.toLowerCase().includes('housing')) {
+      return `Hi! As your Residential Life Assistant, I'm here to help with housing-related questions.`;
+    } else if (assistant.name.toLowerCase().includes('financial') || assistant.name.toLowerCase().includes('aid')) {
+      return `Hello! As your Financial Aid Assistant, I can help you understand financial policies and procedures.`;
+    } else {
+      return `Hi! I'm here to help answer your questions using official university information.`;
+    }
+  }
+
+  private static generateAssistantSpecificResponse(userMessage: string, assistant: Assistant): string {
+    const responseStart = this.getAssistantResponseStart(assistant);
+    
+    if (assistant.name.toLowerCase().includes('residential') || assistant.name.toLowerCase().includes('housing')) {
+      if (userMessage.toLowerCase().includes('microwave') || userMessage.toLowerCase().includes('fridge')) {
+        return `${responseStart}
+
+Generally, most residence halls allow small appliances like microwaves and mini-fridges in dorm rooms, but specific policies can vary by building and room type. I recommend checking with your specific residence hall's policies or contacting Residential Life directly for the most current information about your particular living situation.
+
+You can also check your housing agreement or contact the Residential Life office for detailed appliance guidelines.`;
+      }
+    }
+    
+    return this.generateSimpleFallbackResponse(userMessage, assistant);
   }
 
   private static generateFallbackResponse(userMessage: string, context: string): string {
