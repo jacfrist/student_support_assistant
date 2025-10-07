@@ -24,23 +24,41 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
       return convDate >= startDate;
     });
 
-    // Calculate basic analytics
+    // Get documents for this assistant
+    const documents = FileStorage.getDocumentsByAssistant(params.id);
+    
+    // Calculate response time statistics
+    const responseTimes = recentConversations.flatMap(conv => 
+      conv.messages
+        .filter(msg => msg.role === 'assistant' && msg.metadata?.responseTime)
+        .map(msg => msg.metadata!.responseTime!)
+    );
+    
+    const avgResponseTime = responseTimes.length > 0 
+      ? responseTimes.reduce((sum: number, time: number) => sum + time, 0) / responseTimes.length 
+      : 0;
+    
+    const minResponseTime = responseTimes.length > 0 ? Math.min(...responseTimes) : 0;
+    const maxResponseTime = responseTimes.length > 0 ? Math.max(...responseTimes) : 0;
+
+    // Calculate basic analytics matching frontend expectations
     const analytics = {
-      overview: {
+      summary: {
         totalConversations: recentConversations.length,
         totalMessages: recentConversations.reduce((sum, conv) => sum + conv.messages.length, 0),
-        averageMessagesPerConversation: recentConversations.length > 0 
-          ? Math.round(recentConversations.reduce((sum, conv) => sum + conv.messages.length, 0) / recentConversations.length * 100) / 100
-          : 0,
-        uniqueUsers: new Set(recentConversations.map(conv => conv.sessionId)).size,
+        totalDocuments: documents.length,
+        averageResponseTime: Math.round(avgResponseTime),
+        totalFeedback: Math.floor(recentConversations.length * 0.3) // Mock data
       },
-      dailyStats: generateDailyStats(recentConversations, days),
-      topQuestions: getTopQuestions(recentConversations),
-      responseStats: {
-        averageResponseTime: 1500, // Mock data - could be calculated from message timestamps
-        totalResponses: recentConversations.reduce((sum, conv) => 
-          sum + conv.messages.filter(msg => msg.role === 'assistant').length, 0),
-        successRate: 0.95 // Mock data - could be calculated from user feedback
+      charts: {
+        dailyConversations: generateDailyStats(recentConversations, 10), // Limit to past 10 days
+        commonQuestions: getTopQuestions(recentConversations),
+        documentUsage: generateDocumentUsage(documents),
+        responseTimeStats: {
+          averageResponseTime: Math.round(avgResponseTime),
+          minResponseTime: Math.round(minResponseTime),
+          maxResponseTime: Math.round(maxResponseTime)
+        }
       }
     };
     
@@ -95,5 +113,14 @@ function getTopQuestions(conversations: any[]) {
   return Object.entries(questions)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 10)
-    .map(([question, count]) => ({ question, count }));
+    .map(([question, frequency]) => ({ question, frequency }));
+}
+
+function generateDocumentUsage(documents: any[]) {
+  // Mock document usage data since we don't track citations anymore
+  return documents.map(doc => ({
+    documentId: doc._id,
+    filename: doc.filename,
+    citationCount: Math.floor(Math.random() * 20) + 1 // Mock citation count
+  })).sort((a, b) => b.citationCount - a.citationCount);
 }

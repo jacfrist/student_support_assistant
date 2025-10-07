@@ -10,7 +10,6 @@ interface AnalyticsData {
     totalMessages: number;
     totalDocuments: number;
     averageResponseTime: number;
-    userSatisfactionScore: number;
     totalFeedback: number;
   };
   charts: {
@@ -133,7 +132,7 @@ export default function AnalyticsPage() {
       ) : (
         <>
           {/* Summary Stats */}
-          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-6">
             <div className="bg-white p-6 rounded-lg shadow">
               <div className="flex items-center">
                 <MessageCircle className="h-8 w-8 text-blue-600" />
@@ -171,18 +170,6 @@ export default function AnalyticsPage() {
                   <p className="text-sm font-medium text-gray-600">Avg Response</p>
                   <p className="text-2xl font-semibold text-gray-900">
                     {Math.round(analytics.summary.averageResponseTime || 0)}ms
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white p-6 rounded-lg shadow">
-              <div className="flex items-center">
-                <Star className="h-8 w-8 text-yellow-600" />
-                <div className="ml-4">
-                  <p className="text-sm font-medium text-gray-600">Satisfaction</p>
-                  <p className="text-2xl font-semibold text-gray-900">
-                    {analytics.summary.userSatisfactionScore?.toFixed(1) || 'N/A'}
                   </p>
                 </div>
               </div>

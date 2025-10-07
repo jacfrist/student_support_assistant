@@ -43,6 +43,7 @@ export interface Document {
   processedAt?: Date;
   lastModified: Date;
   checksum: string;
+  amplifyFileId?: string; // Store Amplify file ID for uploaded documents
 }
 
 export interface Conversation {
