@@ -118,7 +118,7 @@ The application uses MongoDB to store assistants, documents, conversations, and 
 You'll need an Amplify API key and assistant ID. Add them to your environment variables:
 
 ```env
-AMPLIFY_API_KEY=amp-v1-wuxkWNosD5AtNe5EDHEvhraDYY5zyCjGkRvdbIsLBRA
+AMPLIFY_API_KEY=your_amplify_api_key_here
 AMPLIFY_ASSISTANT_ID=your_amplify_assistant_id_here
 ```
 

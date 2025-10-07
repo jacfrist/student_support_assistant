@@ -110,7 +110,8 @@ export class AIService {
                             data.data;
       
       if (responseContent && typeof responseContent === 'string') {
-        return responseContent;
+        // Clean up any citations or page references that might have slipped through
+        return this.cleanUpCitations(responseContent);
       }
       
       console.error('Unexpected API response format:', data);
@@ -124,12 +125,14 @@ export class AIService {
 
   private static createSystemMessage(assistant: Assistant): string {
     // Create system message based on assistant type and role
+    const baseCitationInstruction = "IMPORTANT: You must provide answers in your own words. Never mention documents, policies, handbooks, guides, or any source materials. Do not use quotation marks or quote any text. Do not use phrases like 'According to the document', 'The document states', 'The policy says', 'Based on the information provided', or similar references. Students should not know that you are referencing any materials. Speak naturally as if you have the knowledge directly, without referencing where the information comes from.";
+    
     if (assistant.name.toLowerCase().includes('residential') || assistant.name.toLowerCase().includes('housing')) {
-      return `You are ${assistant.name}. You are a helpful assistant that provides information about residential life, housing policies, and campus living. Use the uploaded documents to answer questions accurately and helpfully. Provide clear, direct answers based on the official policies and information in the documents.`;
+      return `You are ${assistant.name}. You are a helpful assistant that provides information about residential life, housing policies, and campus living. Use the uploaded documents to answer questions accurately and helpfully. Provide clear, direct answers based on the official policies and information in the documents. ${baseCitationInstruction}`;
     } else if (assistant.name.toLowerCase().includes('financial') || assistant.name.toLowerCase().includes('aid')) {
-      return `You are ${assistant.name}. You are a helpful assistant that provides information about financial aid, tuition policies, and financial procedures. Use the uploaded documents to answer questions accurately and helpfully. Provide clear, direct answers based on the official policies and information in the documents.`;
+      return `You are ${assistant.name}. You are a helpful assistant that provides information about financial aid, tuition policies, and financial procedures. Use the uploaded documents to answer questions accurately and helpfully. Provide clear, direct answers based on the official policies and information in the documents. ${baseCitationInstruction}`;
     } else {
-      return `You are ${assistant.name}. ${assistant.description || 'You are a helpful assistant.'} Use the uploaded documents to answer questions accurately and helpfully. Provide clear, direct answers based on the official information in the documents.`;
+      return `You are ${assistant.name}. ${assistant.description || 'You are a helpful assistant.'} Use the uploaded documents to answer questions accurately and helpfully. Provide clear, direct answers based on the official information in the documents. ${baseCitationInstruction}`;
     }
   }
 
@@ -317,6 +320,93 @@ export class AIService {
       console.error('Error querying Amplify files:', error);
       return null;
     }
+  }
+
+  private static cleanUpCitations(response: string): string {
+    // Remove various citation patterns that might appear in responses
+    let cleanedResponse = response;
+    
+    // Remove page references like [Page 67], (Page 67), [p. 67], etc.
+    cleanedResponse = cleanedResponse.replace(/\[Page \d+\]/gi, '');
+    cleanedResponse = cleanedResponse.replace(/\(Page \d+\)/gi, '');
+    cleanedResponse = cleanedResponse.replace(/\[p\. \d+\]/gi, '');
+    cleanedResponse = cleanedResponse.replace(/\(p\. \d+\)/gi, '');
+    
+    // Remove document references like [Document: filename.pdf]
+    cleanedResponse = cleanedResponse.replace(/\[Document: [^\]]+\]/gi, '');
+    cleanedResponse = cleanedResponse.replace(/\(Document: [^\)]+\)/gi, '');
+    
+    // Remove source references like [Source: ...]
+    cleanedResponse = cleanedResponse.replace(/\[Source: [^\]]+\]/gi, '');
+    cleanedResponse = cleanedResponse.replace(/\(Source: [^\)]+\)/gi, '');
+    
+    // Remove reference numbers like [1], [2], etc.
+    cleanedResponse = cleanedResponse.replace(/\[\d+\]/gi, '');
+    
+    // Remove any remaining bracket or parenthetical citations
+    cleanedResponse = cleanedResponse.replace(/\[[^\]]*(?:page|doc|source)[^\]]*\]/gi, '');
+    cleanedResponse = cleanedResponse.replace(/\([^\)]*(?:page|doc|source)[^\)]*\)/gi, '');
+    
+    // Remove ALL references to source materials and documents
+    cleanedResponse = cleanedResponse.replace(/According to the (?:document|policy|handbook|guide|material|information),?\s*/gi, '');
+    cleanedResponse = cleanedResponse.replace(/The (?:document|policy|handbook|guide|material) (?:states|says|mentions|indicates|explains|notes|specifies),?\s*/gi, '');
+    cleanedResponse = cleanedResponse.replace(/As stated in the (?:document|policy|handbook|guide|material),?\s*/gi, '');
+    cleanedResponse = cleanedResponse.replace(/Based on the (?:document|policy|handbook|guide|material|information|provided information),?\s*/gi, '');
+    cleanedResponse = cleanedResponse.replace(/According to (?:the\s+)?(?:provided\s+)?(?:university\s+)?(?:policy|information|material|handbook|guide),?\s*/gi, '');
+    cleanedResponse = cleanedResponse.replace(/This is stated in the (?:document|policy|handbook|guide) as follows:?\.?\s*/gi, '');
+    cleanedResponse = cleanedResponse.replace(/The (?:document|policy|handbook|guide|material) (?:also\s+)?(?:explains|indicates|shows|notes),?\s*/gi, '');
+    cleanedResponse = cleanedResponse.replace(/As (?:mentioned|outlined|described) in the (?:document|policy|handbook|guide|material),?\s*/gi, '');
+    cleanedResponse = cleanedResponse.replace(/The (?:document|policy|handbook|guide|material) (?:also\s+)?mentions:?\s*/gi, '');
+    cleanedResponse = cleanedResponse.replace(/(?:From|In) (?:the\s+)?(?:document|handbook|policy|guide|material),?\s*/gi, '');
+    cleanedResponse = cleanedResponse.replace(/As (?:per|outlined in|described in|noted in) (?:the\s+)?(?:document|policy|handbook|guide|material),?\s*/gi, '');
+    cleanedResponse = cleanedResponse.replace(/The (?:provided\s+)?(?:information|material) (?:states|indicates|shows|suggests),?\s*/gi, '');
+    cleanedResponse = cleanedResponse.replace(/(?:This|The) (?:document|handbook|guide|policy|material) (?:also\s+)?(?:states|mentions|says|indicates|explains|notes|specifies),?\s*/gi, '');
+    cleanedResponse = cleanedResponse.replace(/As (?:the\s+)?(?:document|policy|handbook|guide|material) (?:states|mentions|explains|indicates),?\s*/gi, '');
+    cleanedResponse = cleanedResponse.replace(/(?:Referring to|Reference to|Per) (?:the\s+)?(?:document|policy|handbook|guide|material),?\s*/gi, '');
+    
+    // Remove ALL quoted text - students should never see quoted material
+    // Remove quotes containing policy/formal language
+    cleanedResponse = cleanedResponse.replace(/,?\s*"[^"]*(?:permit|allow|require|prohibit|must|shall|students?|campus|university|policy|rule|regulation)[^"]*"/gi, '');
+    
+    // Remove quotes that contain residential/housing terms
+    cleanedResponse = cleanedResponse.replace(/,?\s*"[^"]*(?:First-year|sophomore|junior|senior|residence|dormitory|hall|building|room|housing)[^"]*"/gi, '');
+    
+    // Remove any long quoted sentences (likely from documents)
+    cleanedResponse = cleanedResponse.replace(/,?\s*"[A-Z][^"]{20,}"/g, '');
+    
+    // Remove colon-introduced quotes
+    cleanedResponse = cleanedResponse.replace(/:?\s*"[^"]*"/gi, '');
+    
+    // Remove any remaining quotes that start with capital letters (formal text)
+    cleanedResponse = cleanedResponse.replace(/"[A-Z][^"]+"/g, '');
+    
+    // Remove single quotes used for quoting as well
+    cleanedResponse = cleanedResponse.replace(/'[A-Z][^']{20,}'/g, '');
+    
+    // Clean up sentence structure after removing quotes and references
+    cleanedResponse = cleanedResponse.replace(/,\s*\./g, '.');
+    cleanedResponse = cleanedResponse.replace(/\s+but\s*$/gi, '');
+    cleanedResponse = cleanedResponse.replace(/\s+and\s*$/gi, '');
+    cleanedResponse = cleanedResponse.replace(/\s+or\s*$/gi, '');
+    cleanedResponse = cleanedResponse.replace(/\s*:\s*$/gi, '');
+    cleanedResponse = cleanedResponse.replace(/\.\s*,/g, '.');
+    cleanedResponse = cleanedResponse.replace(/,\s*,/g, ',');
+    
+    // Remove phrases that indicate quoting or referencing
+    cleanedResponse = cleanedResponse.replace(/(?:states that|indicates that|mentions that|explains that|notes that)\s*/gi, '');
+    cleanedResponse = cleanedResponse.replace(/(?:It states|It mentions|It explains|It indicates|It notes)\s*/gi, '');
+    
+    // Remove leftover partial sentences
+    cleanedResponse = cleanedResponse.replace(/^[,.]\s*/g, '');
+    cleanedResponse = cleanedResponse.replace(/\s+[,.]$/g, '');
+    
+    // Clean up extra whitespace that might be left behind
+    cleanedResponse = cleanedResponse.replace(/\s+/g, ' ');
+    cleanedResponse = cleanedResponse.replace(/\s+\./g, '.');
+    cleanedResponse = cleanedResponse.replace(/\s+,/g, ',');
+    cleanedResponse = cleanedResponse.trim();
+    
+    return cleanedResponse;
   }
 
   private static async getAssistant(assistantId: string): Promise<Assistant | null> {
